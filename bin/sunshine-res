@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # Sunshine prep-cmd helper.
 #   sunshine-res apply [W H FPS] -> switch to the supported mode closest to the Moonlight client's resolution
-#   sunshine-res restore -> back to your normal monitor settings (NATIVE_* below)
+#   sunshine-res restore -> back to the settings the monitor had before apply/fixed
 #   sunshine-res fixed WxH [SCALE] -> fixed supported mode (e.g. 1280x720 125)
 # Connector is auto-detected so DP-2/DP-3 renames don't break it.
 set -u
 
-# Your monitor's normal settings, restored when a stream ends. Override via env if you like.
-NATIVE_MODE=${SUNSHINE_RES_NATIVE_MODE:-3440x1440}
-NATIVE_HZ=${SUNSHINE_RES_NATIVE_HZ:-165}
-NATIVE_SCALE=${SUNSHINE_RES_NATIVE_SCALE:-125}
+# apply/fixed remember the monitor's current resolution, refresh rate and scale; restore puts them back.
+# Only the first switch saves, so a crash between streams can't make a temporary mode the "normal" one.
+# Optional override: set all three SUNSHINE_RES_NATIVE_* (e.g. 3440x1440, 165, 125) to always restore those.
+SAVED=${XDG_RUNTIME_DIR:-/tmp}/sunshine-res.native
 # "apply" picks a UI scale so the desktop is about this many logical pixels tall on the client.
 TARGET_HEIGHT=${SUNSHINE_RES_TARGET_HEIGHT:-720}
 export PATH="/usr/local/bin:/usr/bin:$PATH"
@@ -34,12 +34,28 @@ set_mode() {
     sleep 3
 }
 
+# Saves "RESOLUTION REFRESH SCALE" of the current mode, unless a saved one is still pending.
+save_native() {
+    [ -s "$SAVED" ] && return
+    row | awk -F'│' '{gsub(/ /,"",$5); gsub(/ /,"",$6); gsub(/[ %]/,"",$7); print $5, $6, $7}' > "$SAVED"
+}
+
 conn=$(displayconfig-mutter list 2>/dev/null | awk -F'│' 'NR>3 && $2 ~ /[A-Za-z]/ {gsub(/ /,"",$2); print $2; exit}')
 [ -n "$conn" ] || { log "no monitor found"; exit 0; }
 
 case "${1:-}" in
 restore)
-    set_mode -r "$NATIVE_MODE" --refresh-rate "$NATIVE_HZ" --scaling "$NATIVE_SCALE" --color-mode sdr
+    if [ -n "${SUNSHINE_RES_NATIVE_MODE:-}" ] && [ -n "${SUNSHINE_RES_NATIVE_HZ:-}" ] && [ -n "${SUNSHINE_RES_NATIVE_SCALE:-}" ]; then
+        native="$SUNSHINE_RES_NATIVE_MODE $SUNSHINE_RES_NATIVE_HZ $SUNSHINE_RES_NATIVE_SCALE"
+    elif [ -s "$SAVED" ]; then
+        native=$(cat "$SAVED")
+    else
+        log "nothing saved to restore"; exit 0
+    fi
+    read -r nmode nhz nscale <<< "$native"
+    log "restoring $conn $nmode @ ${nhz}Hz ${nscale}%"
+    set_mode -r "$nmode" --refresh-rate "$nhz" --scaling "$nscale"
+    rm -f "$SAVED"
     ;;
 apply)
     # Args win over env: flatpak-spawn --host does not forward Sunshine's env vars.
@@ -56,9 +72,11 @@ apply)
     scale=$(( (${mode#*x} * 100 / TARGET_HEIGHT + 12) / 25 * 25 ))
     [ "$scale" -ge 100 ] || scale=100
     log "client ${w}x${h}@${fps} -> $conn $mode @ ${scale}%"
+    save_native
     set_mode -r "$mode" --refresh-rate "$fps" --scaling "$scale"
     ;;
 fixed)
+    save_native
     set_mode -r "${2:-1920x1080}" --max-refresh-rate --scaling "${3:-100}"
     ;;
 *) echo "usage: $0 apply|restore|fixed WxH [SCALE]" >&2; exit 1 ;;

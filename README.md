@@ -38,14 +38,21 @@ sunshine-res restore           # back to your normal settings
 
 The monitor connector is detected automatically.
 
-**Set your normal monitor settings** at the top of the script, or through environment variables:
+**No setup needed for your monitor:** before switching, `apply` and `fixed` save the monitor's current resolution, refresh rate and scale to `$XDG_RUNTIME_DIR/sunshine-res.native`. `restore` puts exactly that back and deletes the file. Only the first switch saves, so if Sunshine crashes between streams, the temporary mode never becomes your "normal" one.
+
+Optional environment variables:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SUNSHINE_RES_NATIVE_MODE` | `3440x1440` | resolution to restore |
-| `SUNSHINE_RES_NATIVE_HZ` | `165` | refresh rate to restore |
-| `SUNSHINE_RES_NATIVE_SCALE` | `125` | UI scale (%) to restore |
+| `SUNSHINE_RES_NATIVE_MODE` | – | always restore this resolution, e.g. `2560x1440` |
+| `SUNSHINE_RES_NATIVE_HZ` | – | …this refresh rate, e.g. `144` |
+| `SUNSHINE_RES_NATIVE_SCALE` | – | …this UI scale in %, e.g. `100` |
 | `SUNSHINE_RES_TARGET_HEIGHT` | `720` | logical height `apply` aims for |
+
+The three `NATIVE` variables only take effect when all three are set. They then replace the saved settings.
+
+> [!IMPORTANT]
+> The settings are saved the moment a stream starts, so the monitor must be in its normal mode at that point. **Stop Sunshine first** (or end every stream) when you set this up or change your normal display settings, and make sure the monitor shows its usual resolution and scale. If a crash ever leaves the monitor stuck in a stream mode, run `sunshine-res restore`.
 
 **Why it waits after each switch:** mutter applies display modes asynchronously, and a refresh-rate change makes the monitor re-sync. If Sunshine starts capturing in the middle of a switch, the XDG portal stream never starts. Moonlight then shows *"no video received"*, Sunshine hangs, and GNOME asks for screen-share permission again. So `sunshine-res` waits until mutter reports the new mode, then gives the monitor 3 seconds to settle.
 
@@ -93,6 +100,45 @@ Moonlight sorts apps alphabetically and has no setting for that. To pin apps to 
   - Add the PC in Moonlight by its Tailscale IP.
   - Make sure Moonlight isn't excluded in the Tailscale Android app's split tunneling.
   - Allow `41641/udp` in the PC firewall, so Tailscale can hold a direct connection instead of falling back to a relay.
+
+## Tip: two extra desktop entries
+
+Next to Sunshine's normal **Desktop**, these two are handy. The screenshot above shows them as "Fit to Device" and "Low Res".
+
+| Entry | What it does | `do` | `undo` |
+|---|---|---|---|
+| **Fit to Device** | fits the monitor to whatever connects: phone, tablet, laptop | `sh -c "flatpak-spawn --host /home/YOU/.local/bin/sunshine-res apply ${SUNSHINE_CLIENT_WIDTH} ${SUNSHINE_CLIENT_HEIGHT} ${SUNSHINE_CLIENT_FPS}"` | `flatpak-spawn --host /home/YOU/.local/bin/sunshine-res restore` |
+| **Low Res** | a fixed low resolution for slow connections | `flatpak-spawn --host /home/YOU/.local/bin/sunshine-res fixed 1280x720 100` | `flatpak-spawn --host /home/YOU/.local/bin/sunshine-res restore` |
+
+Replace `/home/YOU` with your home folder. With an ostree system (Silverblue, Bazzite…), use the real path, e.g. `/var/home/YOU`.
+
+**Add them in Sunshine's web UI:**
+1. Open `https://localhost:47990` and go to **Applications → Add New**.
+2. Enter a name. Start it with spaces to pin it to the top in Moonlight, e.g. `" Low Res Desktop"`.
+3. Under **Command Preparations**, add a row with the `do` and `undo` commands from the table above.
+4. Leave **Command** empty: the entry just streams the desktop.
+5. Optionally set **Image** to a cover (see below), then save.
+
+Or paste the entries from [`examples/apps.json`](examples/apps.json) into Sunshine's `apps.json` (`~/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine/apps.json`) and restart Sunshine.
+
+**Picking the Low Res mode:** `fixed` only accepts modes your monitor supports. List them with:
+
+```sh
+displayconfig-mutter list -c <connector>   # connector from: displayconfig-mutter list
+```
+
+Take a low mode with your monitor's aspect ratio. At low resolutions GNOME often allows only a few UI scales. At 1280×720 that's just 100% or 125%.
+
+**Matching covers:**
+
+```sh
+cd ~/.local/share/sunshine-covers && . ./cover.sh
+cover desktop         "Desktop"       desktop.svg
+cover desktop-dynamic "Fit to Device" desktop-dynamic.svg
+cover desktop-lowres  "Low Res"       desktop-lowres-icon.png 380 "#c2410c"
+```
+
+Then set **Image** to `~/.local/share/sunshine-covers/desktop-dynamic.png` or `desktop-lowres.png`, using the full path.
 
 ## License
 
