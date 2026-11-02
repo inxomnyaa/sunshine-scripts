@@ -12,14 +12,64 @@ Built for Sunshine as a **Flatpak** on **GNOME**. Every command reaches the host
 
 ## Requirements
 
-- Sunshine Flatpak (`dev.lizardbyte.app.Sunshine`)
-- [`displayconfig-mutter`](https://github.com/eaglesemanation/displayconfig-mutter) on the host (`sunshine-res`)
-- ImageMagick 7 (`magick`) and fontconfig (covers)
-- [`gum`](https://github.com/charmbracelet/gum) and Python 3 (`sunshine-add`)
+| What | Needed by | Check |
+|---|---|---|
+| Sunshine Flatpak (`dev.lizardbyte.app.Sunshine`) | everything | `flatpak info dev.lizardbyte.app.Sunshine` |
+| [`displayconfig-mutter`](https://github.com/eaglesemanation/displayconfig-mutter) on the host | `sunshine-res` | `displayconfig-mutter list` |
+| ImageMagick **7** (the `magick` command) and fontconfig | covers | `magick -version` |
+| [`gum`](https://github.com/charmbracelet/gum) and Python 3 | `sunshine-add` | `gum --version` |
+
+**Bazzite** already ships `gum`, ImageMagick 7, fontconfig and Python. You only need Sunshine and `displayconfig-mutter`.
+
+### Sunshine (Flatpak)
+
+```sh
+flatpak install flathub dev.lizardbyte.app.Sunshine
+flatpak run --command=additional-install.sh dev.lizardbyte.app.Sunshine   # input devices + user service
+```
+
+On **Bazzite**, use `ujust setup-sunshine enable` instead. It does the same and enables the service.
+
+### displayconfig-mutter
+
+These commands come from the [project's own instructions](https://github.com/eaglesemanation/displayconfig-mutter#installation):
+
+```sh
+# Fedora
+sudo dnf copr enable eaglesemanation/displayconfig-mutter && sudo dnf install displayconfig-mutter
+# Ubuntu / Linux Mint
+sudo add-apt-repository ppa:eaglesemanation/displayconfig-mutter && sudo apt update && sudo apt install displayconfig-mutter
+# Arch (AUR)
+yay -S displayconfig-mutter
+```
+
+**Any other distro, including Bazzite, Silverblue and other ostree systems:** download the prebuilt binary to `/usr/local/bin`.
+
+```sh
+curl "https://github.com/eaglesemanation/displayconfig-mutter/releases/latest/download/displayconfig-mutter-$(uname -m)" -L -o displayconfig-mutter \
+  && sudo install -Dm0755 displayconfig-mutter /usr/local/bin/displayconfig-mutter \
+  && rm displayconfig-mutter
+```
+
+### ImageMagick 7, gum, fontconfig, Python
+
+```sh
+# Fedora
+sudo dnf install ImageMagick gum fontconfig python3
+# Arch
+sudo pacman -S imagemagick gum fontconfig python
+```
+
+**Debian/Ubuntu:**
+- Older releases still ship ImageMagick 6, which has no `magick` command. Check with `magick -version`.
+- `gum` isn't in the default repos. See [gum's install options](https://github.com/charmbracelet/gum#installation).
+
+[Homebrew](https://brew.sh) works on any distro: `brew install imagemagick gum`.
 
 ## Install
 
 ```sh
+git clone https://github.com/inxomnyaa/sunshine-scripts.git && cd sunshine-scripts
 ./install.sh
 ```
 
