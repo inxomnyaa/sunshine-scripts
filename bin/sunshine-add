@@ -1,0 +1,294 @@
+#!/usr/bin/env python3
+"""Add an installed app or a Steam game to Sunshine (Flatpak), with a generated Moonlight cover.
+
+  sunshine-add                         interactive: pick "Installed app" or "Steam game"
+  sunshine-add steam <appid>           add a Steam game with default settings
+  sunshine-add desktop <file.desktop>  add an app from its .desktop file with default settings
+  add --restart to restart Sunshine afterwards without asking
+
+Re-adding an app with the same name updates its entry. A backup is kept as apps.json.before-add.
+"""
+import glob, json, os, re, shlex, shutil, subprocess, sys, time
+
+HOME = os.path.realpath(os.path.expanduser("~"))
+COVERS = f"{HOME}/.local/share/sunshine-covers"
+APPS = f"{HOME}/.var/app/dev.lizardbyte.app.Sunshine/config/sunshine/apps.json"
+STEAM = f"{HOME}/.local/share/Steam"
+RES = f"flatpak-spawn --host {HOME}/.local/bin/sunshine-res"
+FIT = [{"do": f'sh -c "{RES} apply ${{SUNSHINE_CLIENT_WIDTH}} ${{SUNSHINE_CLIENT_HEIGHT}} ${{SUNSHINE_CLIENT_FPS}}"',
+        "undo": f"{RES} restore"}]
+SKIP_STEAM = re.compile(r"Proton|Steam Linux Runtime|Steamworks|SteamVR", re.I)
+APP_DIRS = [f"{HOME}/.local/share/applications", f"{HOME}/.local/share/flatpak/exports/share/applications",
+            "/var/lib/flatpak/exports/share/applications", "/usr/local/share/applications", "/usr/share/applications"]
+ICON_DIRS = [f"{HOME}/.local/share/icons", f"{HOME}/.local/share/flatpak/exports/share/icons",
+             "/var/lib/flatpak/exports/share/icons", "/usr/share/icons", "/usr/share/pixmaps", f"{HOME}/AppImages/.icons"]
+
+
+# ---- prompts (gum) ----
+def choose(header, options):
+    r = subprocess.run(["gum", "filter", "--header", header, "--placeholder", "type to search…", "--height", "20"],
+                       input="\n".join(options), stdout=subprocess.PIPE, text=True)
+    if r.returncode or not r.stdout.strip():
+        sys.exit("cancelled")
+    return r.stdout.strip()
+
+
+def ask(header, default):
+    r = subprocess.run(["gum", "input", "--header", header, "--value", default], stdout=subprocess.PIPE, text=True)
+    if r.returncode:
+        sys.exit("cancelled")
+    return r.stdout.strip() or default
+
+
+def confirm(question, default=True):
+    return subprocess.run(["gum", "confirm", question, f"--default={str(default).lower()}"]).returncode == 0
+
+
+# ---- covers ----
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def sh_cover(func, *args):
+    subprocess.run(["bash", "-c", f'. "{COVERS}/cover.sh"; {func} "$@"', "_", *args], check=True)
+
+
+def find_icon(name):
+    if not name:
+        return None
+    if os.path.isabs(name):
+        return name if os.path.exists(name) else None
+    best, best_score = None, -1
+    for d in ICON_DIRS:
+        for p in glob.glob(f"{d}/**/{glob.escape(name)}*", recursive=True):
+            base = os.path.basename(p)
+            if "symbolic" in p or base not in (name, name + ".svg", name + ".png"):
+                continue
+            if p.endswith(".svg"):
+                score = 100000
+            else:
+                m = re.search(r"/(\d+)x\d+/", p)
+                score = int(m[1]) if m else int(subprocess.run(
+                    ["magick", "identify", "-format", "%w", p + "[0]"], capture_output=True, text=True).stdout or 0)
+            if score > best_score:
+                best, best_score = p, score
+    return best
+
+
+# ---- sources ----
+def read_desktop(path):
+    entry, section = {}, None
+    for line in open(path, errors="replace"):
+        line = line.strip()
+        if line.startswith("["):
+            section = line
+        elif section == "[Desktop Entry]" and "=" in line:
+            k, v = line.split("=", 1)
+            entry.setdefault(k.strip(), v.strip())
+    return entry
+
+
+def desktop_apps():
+    found = {}
+    for d in APP_DIRS:  # earlier dirs win, so user entries override system ones
+        for f in sorted(glob.glob(f"{d}/*.desktop")):
+            e = read_desktop(f)
+            if (e.get("Type") != "Application" or "Exec" not in e or "Name" not in e
+                    or "true" in (e.get("NoDisplay"), e.get("Hidden"), e.get("Terminal"))):
+                continue
+            found.setdefault(os.path.basename(f), (e["Name"], f, e))
+    return sorted(found.values(), key=lambda t: t[0].lower())
+
+
+def clean_exec(cmd):
+    # Drop file placeholders: %f/%u codes and Flatpak's --file-forwarding @@ ... @@ markers.
+    words = [w for w in shlex.split(cmd)
+             if not re.fullmatch(r"%[fFuUdDnNickvm]|@@u?|--file-forwarding", w)]
+    return " ".join(shlex.quote(w) for w in words)
+
+
+def steam_games():
+    vdf = f"{STEAM}/steamapps/libraryfolders.vdf"
+    libs = re.findall(r'"path"\s+"([^"]+)"', open(vdf).read()) if os.path.exists(vdf) else [STEAM]
+    games = []
+    for lib in libs:
+        for m in glob.glob(f"{lib}/steamapps/appmanifest_*.acf"):
+            t = open(m, errors="replace").read()
+            appid, name = re.search(r'"appid"\s+"(\d+)"', t)[1], re.search(r'"name"\s+"([^"]+)"', t)[1]
+            if not SKIP_STEAM.search(name):
+                games.append((name, appid))
+    return sorted(games, key=lambda g: g[0].lower())
+
+
+# ---- config ----
+def make_entry(name, image, cmd, ends_with_app, fit):
+    e = {"name": name, "image-path": image, "auto-detach": True, "wait-all": True,
+         "exit-timeout": 5, "exclude-global-prep-cmd": False}
+    if fit:
+        e["prep-cmd"] = FIT
+    if ends_with_app:
+        e["cmd"] = "flatpak-spawn --host " + cmd
+    else:  # launcher forks and exits (Steam, IDEs): don't tie the stream to it
+        e["detached"] = ["flatpak-spawn --host " + cmd]
+    return e
+
+
+def save(entry):
+    d = json.load(open(APPS))
+    shutil.copy(APPS, APPS + ".before-add")
+    names = [a["name"] for a in d["apps"]]
+    if entry["name"] in names:
+        d["apps"][names.index(entry["name"])] = entry
+        print(f"Updated '{entry['name']}'")
+    else:
+        d["apps"].append(entry)
+        print(f"Added '{entry['name']}'")
+    json.dump(d, open(APPS, "w"), indent=4)
+
+
+def remember_cover(line):
+    """Append to make-covers.sh so a full re-render keeps this cover."""
+    path = f"{COVERS}/make-covers.sh"
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write("#!/usr/bin/env bash\n# Re-renders generated covers. sunshine-add appends a line per app.\n"
+                    "set -eu\ncd \"$(dirname \"$0\")\"\n. ./cover.sh\n\n")
+        os.chmod(path, 0o755)
+    if line not in open(path).read():
+        open(path, "a").write(line + "\n")
+
+
+SGDB_KEY = f"{HOME}/.config/steamgriddb/api_key"
+SGDB_API = "https://www.steamgriddb.com/api/v2"
+
+
+def sgdb_get(path):
+    import urllib.request
+    if not os.path.exists(SGDB_KEY):
+        print("SteamGridDB needs a free API key: log in at https://www.steamgriddb.com, then copy it from\n"
+              "https://www.steamgriddb.com/profile/preferences/api")
+        key = ask("Paste your SteamGridDB API key", "")
+        if not key:
+            sys.exit("no API key")
+        os.makedirs(os.path.dirname(SGDB_KEY), exist_ok=True)
+        with open(os.open(SGDB_KEY, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            f.write(key)
+    req = urllib.request.Request(SGDB_API + path, headers={
+        "Authorization": "Bearer " + open(SGDB_KEY).read().strip(), "User-Agent": "sunshine-add"})
+    data = json.load(urllib.request.urlopen(req, timeout=20))
+    if not data.get("success"):
+        sys.exit(f"SteamGridDB error: {data}")
+    return data["data"]
+
+
+def sgdb_cover(out, steam_appid=None, search=None):
+    """Let the user pick a portrait grid from SteamGridDB; returns False if none was picked."""
+    import urllib.parse, urllib.request
+    if steam_appid:
+        game_path = f"/grids/steam/{steam_appid}"
+    else:
+        hits = sgdb_get("/search/autocomplete/" + urllib.parse.quote(search))
+        if not hits:
+            print("No SteamGridDB match for", search)
+            return False
+        labels = [f"{h['name']}  [{h['id']}]" for h in hits]
+        game_path = "/grids/game/" + re.search(r"\[(\d+)\]$", choose("Which game on SteamGridDB?", labels))[1]
+    grids = sgdb_get(game_path + "?dimensions=600x900,342x482,660x930&types=static&nsfw=false")[:12]
+    if not grids:
+        print("No portrait covers on SteamGridDB for this one")
+        return False
+    tmp = f"{COVERS}/.sgdb"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp)
+    for i, g in enumerate(grids, 1):
+        urllib.request.urlretrieve(g["thumb"], f"{tmp}/{i:02d}")
+    sheet = f"{tmp}/choose.png"
+    subprocess.run(["magick", "montage", "-label", "%f", *[f"{tmp}/{i:02d}" for i in range(1, len(grids) + 1)],
+                    "-geometry", "200x267+8+8", "-tile", "6x", "-pointsize", "22", sheet], check=True)
+    subprocess.Popen(["xdg-open", sheet], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    pick = choose("Which cover? (numbers are shown in the image that just opened)",
+                  [f"{i:02d}" for i in range(1, len(grids) + 1)] + ["none"])
+    if pick == "none":
+        return False
+    full = f"{tmp}/full"
+    urllib.request.urlretrieve(grids[int(pick) - 1]["url"], full)
+    sh_cover("steamcover", out, full)
+    shutil.rmtree(tmp, ignore_errors=True)
+    return True
+
+
+def add_steam(appid=None, interactive=True):
+    games = steam_games()
+    if appid is None:
+        pick = choose("Pick a Steam game", [f"{n}  [{a}]" for n, a in games])
+        appid = re.search(r"\[(\d+)\]$", pick)[1]
+    name = dict((a, n) for n, a in games).get(appid) or sys.exit(f"Steam app {appid} not installed")
+    if interactive:
+        name = ask("Name in Moonlight", name)
+    fit = confirm("Switch the monitor to fit the phone/client while streaming?") if interactive else True
+    out = f"{COVERS}/steam-{appid}"
+    art = sorted(glob.glob(f"{STEAM}/appcache/librarycache/{appid}/**/library_600x900*.jpg", recursive=True))
+    if interactive and choose("Cover art from?", ["Steam library art", "SteamGridDB"]) == "SteamGridDB" \
+            and sgdb_cover(out, steam_appid=appid):
+        pass
+    elif art:
+        sh_cover("steamcover", out, art[0])
+    else:
+        icon = find_icon(f"steam_icon_{appid}") or "/usr/share/icons/hicolor/256x256/apps/steam.png"
+        sh_cover("cover", out, name, icon)
+    save(make_entry(name, out + ".png", f"steam steam://rungameid/{appid}", False, fit))
+
+
+def add_desktop(path=None, interactive=True):
+    if path is None:
+        apps = desktop_apps()
+        labels = [f"{n}  ({os.path.basename(f)})" for n, f, _ in apps]
+        path = apps[labels.index(choose("Pick an installed app", labels))][1]
+    e = read_desktop(path)
+    cmd = clean_exec(e["Exec"])
+    # Steam shortcuts hand off to the running Steam and exit at once, so never tie the stream to them.
+    is_game = "Game" in e.get("Categories", "") and "steam://" not in cmd
+    name = e.get("Name", slug(os.path.basename(path)))
+    if interactive:
+        name = ask("Name in Moonlight", name)
+        ends = confirm("End the stream when the app closes?  (yes: games/emulators, no: IDEs/tools)", is_game)
+        fit = confirm("Switch the monitor to fit the phone/client while streaming?")
+    else:
+        ends, fit = is_game, True
+    icon = find_icon(e.get("Icon")) or f"{COVERS}/desktop.svg"
+    s = slug(name)
+    if not (interactive and choose("Cover art from?", ["Generated from the app icon", "SteamGridDB"]) == "SteamGridDB"
+            and sgdb_cover(f"{COVERS}/{s}", search=name)):
+        sh_cover("cover", f"{COVERS}/{s}", name, icon)
+        remember_cover(f'cover {s:<16} {shlex.quote(name):<16} {shlex.quote(icon)}')
+    save(make_entry(name, f"{COVERS}/{s}.png", cmd, ends, fit))
+
+
+def restart_sunshine():
+    subprocess.run(["systemctl", "--user", "restart", "app-dev.lizardbyte.app.Sunshine"], check=True)
+    print("Sunshine restarted")
+
+
+def main():
+    args = [a for a in sys.argv[1:] if a != "--restart"]
+    restart = "--restart" in sys.argv
+    interactive = not args
+    if interactive:
+        if choose("What do you want to add?", ["Installed app", "Steam game"]) == "Steam game":
+            add_steam()
+        else:
+            add_desktop()
+    elif args[0] == "steam" and len(args) == 2:
+        add_steam(args[1], False)
+    elif args[0] == "desktop" and len(args) == 2:
+        add_desktop(args[1], False)
+    else:
+        sys.exit(__doc__)
+    if restart or (interactive and confirm("Restart Sunshine now so Moonlight sees it? (ends an active stream)")):
+        restart_sunshine()
+    else:
+        print("Restart Sunshine to load the change.")
+
+
+if __name__ == "__main__":
+    main()

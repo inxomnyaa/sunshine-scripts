@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Sunshine prep-cmd helper.
+#   sunshine-res apply [W H FPS] -> switch to the supported mode closest to the Moonlight client's resolution
+#   sunshine-res restore -> back to your normal monitor settings (NATIVE_* below)
+#   sunshine-res fixed WxH [SCALE] -> fixed supported mode (e.g. 1280x720 125)
+# Connector is auto-detected so DP-2/DP-3 renames don't break it.
+set -u
+
+# Your monitor's normal settings, restored when a stream ends. Override via env if you like.
+NATIVE_MODE=${SUNSHINE_RES_NATIVE_MODE:-3440x1440}
+NATIVE_HZ=${SUNSHINE_RES_NATIVE_HZ:-165}
+NATIVE_SCALE=${SUNSHINE_RES_NATIVE_SCALE:-125}
+# "apply" picks a UI scale so the desktop is about this many logical pixels tall on the client.
+TARGET_HEIGHT=${SUNSHINE_RES_TARGET_HEIGHT:-720}
+export PATH="/usr/local/bin:/usr/bin:$PATH"
+log() { echo "[sunshine-res] $*" >&2; }
+
+# Mutter applies modes asynchronously, and a refresh-rate change makes the monitor re-sync for a
+# few seconds. If screen capture starts mid-switch the portal stream never starts: Moonlight shows
+# "no video received", Sunshine hangs/crashes and GNOME asks for screen-share permission again.
+# Resolution alone isn't a reliable signal (e.g. an ultrawide keeps its resolution for phones), so
+# compare the whole monitor row (resolution, refresh, scale) before/after, then let the monitor settle.
+row() { displayconfig-mutter list 2>/dev/null | grep "│ *$conn *│" ; }
+
+# set_mode <displayconfig-mutter set args...>
+set_mode() {
+    local before i
+    before=$(row)
+    displayconfig-mutter set -c "$conn" "$@"
+    for i in $(seq 25); do
+        [ "$(row)" != "$before" ] && break
+        sleep 0.2
+    done
+    sleep 3
+}
+
+conn=$(displayconfig-mutter list 2>/dev/null | awk -F'│' 'NR>3 && $2 ~ /[A-Za-z]/ {gsub(/ /,"",$2); print $2; exit}')
+[ -n "$conn" ] || { log "no monitor found"; exit 0; }
+
+case "${1:-}" in
+restore)
+    set_mode -r "$NATIVE_MODE" --refresh-rate "$NATIVE_HZ" --scaling "$NATIVE_SCALE" --color-mode sdr
+    ;;
+apply)
+    # Args win over env: flatpak-spawn --host does not forward Sunshine's env vars.
+    w=${2:-${SUNSHINE_CLIENT_WIDTH:-1920}} h=${3:-${SUNSHINE_CLIENT_HEIGHT:-1080}} fps=${4:-${SUNSHINE_CLIENT_FPS:-60}}
+    # Pick the mode with the closest aspect ratio; tie-break on closest height.
+    mode=$(displayconfig-mutter list -c "$conn" 2>/dev/null \
+        | awk -F'│' '{gsub(/ /,"",$3)} $3 ~ /^[0-9]+x[0-9]+$/ {print $3}' \
+        | awk -F'x' -v w="$w" -v h="$h" '
+            { a=$1/$2; t=w/h; d=(a>t?a-t:t-a); dh=($2>h?$2-h:h-$2)
+              s=d*100000+dh; if (best=="" || s<bs) {best=$0; bs=s} }
+            END { print best }')
+    [ -n "$mode" ] || mode=1920x1080
+    # Scale so the desktop is ~TARGET_HEIGHT logical px tall (readable on a phone); mutter rounds to the nearest valid step.
+    scale=$(( (${mode#*x} * 100 / TARGET_HEIGHT + 12) / 25 * 25 ))
+    [ "$scale" -ge 100 ] || scale=100
+    log "client ${w}x${h}@${fps} -> $conn $mode @ ${scale}%"
+    set_mode -r "$mode" --refresh-rate "$fps" --scaling "$scale"
+    ;;
+fixed)
+    set_mode -r "${2:-1920x1080}" --max-refresh-rate --scaling "${3:-100}"
+    ;;
+*) echo "usage: $0 apply|restore|fixed WxH [SCALE]" >&2; exit 1 ;;
+esac
+exit 0

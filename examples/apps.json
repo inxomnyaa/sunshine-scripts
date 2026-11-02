@@ -1,0 +1,34 @@
+{
+    "apps": [
+        {
+            "name": "  Desktop",
+            "image-path": "/home/YOU/.local/share/sunshine-covers/desktop.png"
+        },
+        {
+            "name": " Fit to Device",
+            "image-path": "/home/YOU/.local/share/sunshine-covers/desktop-dynamic.png",
+            "prep-cmd": [
+                {
+                    "do": "sh -c \"flatpak-spawn --host /home/YOU/.local/bin/sunshine-res apply ${SUNSHINE_CLIENT_WIDTH} ${SUNSHINE_CLIENT_HEIGHT} ${SUNSHINE_CLIENT_FPS}\"",
+                    "undo": "flatpak-spawn --host /home/YOU/.local/bin/sunshine-res restore"
+                }
+            ],
+            "auto-detach": true,
+            "wait-all": true,
+            "exit-timeout": 5
+        },
+        {
+            "name": " Low Res Desktop",
+            "image-path": "/home/YOU/.local/share/sunshine-covers/desktop-lowres.png",
+            "prep-cmd": [
+                {
+                    "do": "flatpak-spawn --host /home/YOU/.local/bin/sunshine-res fixed 1280x720 100",
+                    "undo": "flatpak-spawn --host /home/YOU/.local/bin/sunshine-res restore"
+                }
+            ],
+            "auto-detach": true,
+            "wait-all": true,
+            "exit-timeout": 5
+        }
+    ]
+}
