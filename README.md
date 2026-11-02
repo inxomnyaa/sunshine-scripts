@@ -135,7 +135,7 @@ Take a low mode with your monitor's aspect ratio. At low resolutions GNOME often
 cd ~/.local/share/sunshine-covers && . ./cover.sh
 cover desktop         "Desktop"       desktop.svg
 cover desktop-dynamic "Fit to Device" desktop-dynamic.svg
-cover desktop-lowres  "Low Res"       desktop-lowres-icon.png 380 "#c2410c"
+cover desktop-lowres  "Low Res"       desktop-lowres.svg 380 "#c2410c"
 ```
 
 Then set **Image** to `~/.local/share/sunshine-covers/desktop-dynamic.png` or `desktop-lowres.png`, using the full path.
