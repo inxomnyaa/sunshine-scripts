@@ -8,6 +8,8 @@ Helpers for streaming a GNOME (Wayland) desktop with [Sunshine](https://github.c
 
 Built for Sunshine as a **Flatpak** on **GNOME**. Every command reaches the host through `flatpak-spawn --host`.
 
+<p align="center"><img src="docs/moonlight.jpg" width="320" alt="Moonlight app grid on a phone: Desktop, Fit to Device and Low Res pinned first, then apps and Steam games with covers made by these scripts"></p>
+
 ## Requirements
 
 - Sunshine Flatpak (`dev.lizardbyte.app.Sunshine`)
