@@ -3,6 +3,9 @@
 #   sunshine-res apply [W H FPS] -> switch to the supported mode closest to the Moonlight client's resolution
 #   sunshine-res restore -> back to the settings the monitor had before apply/fixed
 #   sunshine-res fixed WxH [SCALE] -> fixed supported mode (e.g. 1280x720 125)
+#   sunshine-res scale [SCALE] -> keep resolution + refresh rate, only enlarge the UI
+#                                 (default: ~TARGET_HEIGHT logical px tall). For games/emulators with
+#                                 resolution mods that must see the native mode.
 # Connector is auto-detected so DP-2/DP-3 renames don't break it.
 set -u
 
@@ -79,6 +82,14 @@ fixed)
     save_native
     set_mode -r "${2:-1920x1080}" --max-refresh-rate --scaling "${3:-100}"
     ;;
-*) echo "usage: $0 apply|restore|fixed WxH [SCALE]" >&2; exit 1 ;;
+scale)
+    read -r cmode chz <<< "$(row | awk -F'│' '{gsub(/ /,"",$5); gsub(/ /,"",$6); print $5, $6}')"
+    scale=${2:-$(( (${cmode#*x} * 100 / TARGET_HEIGHT + 12) / 25 * 25 ))}
+    [ "$scale" -ge 100 ] || scale=100
+    log "keeping $conn $cmode @ ${chz}Hz, UI scale ${scale}%"
+    save_native
+    set_mode -r "$cmode" --refresh-rate "$chz" --scaling "$scale"
+    ;;
+*) echo "usage: $0 apply|restore|fixed WxH [SCALE]|scale [SCALE]" >&2; exit 1 ;;
 esac
 exit 0

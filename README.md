@@ -80,11 +80,13 @@ The script copies `bin/*` to `~/.local/bin` and `covers/*` to `~/.local/share/su
 ```sh
 sunshine-res apply [W H FPS]   # fit the monitor to the client (defaults to SUNSHINE_CLIENT_* env)
 sunshine-res fixed WxH [SCALE] # fixed mode, e.g. 1280x720 100
+sunshine-res scale [SCALE]     # keep resolution + refresh rate, only enlarge the UI
 sunshine-res restore           # back to your normal settings
 ```
 
 - **`apply`** picks the monitor mode closest to the client's aspect ratio. It then sets the UI scale so the desktop is about 720 logical pixels tall, which keeps text readable on a phone.
 - **`fixed`** uses the highest refresh rate available for that mode.
+- **`scale`** is for games and emulators whose resolution or widescreen mods need the native mode: only the UI scale changes (default: same target height as `apply`).
 
 The monitor connector is detected automatically.
 
