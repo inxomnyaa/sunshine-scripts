@@ -233,7 +233,7 @@ def add_steam(appid=None, interactive=True):
     name = dict((a, n) for n, a in games).get(appid) or sys.exit(f"Steam app {appid} not installed")
     if interactive:
         name = ask("Name in Moonlight", name)
-    fit = confirm("Switch the monitor to fit the phone/client while streaming?") if interactive else True
+    fit = confirm("Switch the monitor to fit the client while streaming?") if interactive else True
     out = f"{COVERS}/steam-{appid}"
     art = sorted(glob.glob(f"{STEAM}/appcache/librarycache/{appid}/**/library_600x900*.jpg", recursive=True))
     if interactive and choose("Cover art from?", ["Steam library art", "SteamGridDB"]) == "SteamGridDB" \
@@ -260,7 +260,7 @@ def add_desktop(path=None, interactive=True):
     if interactive:
         name = ask("Name in Moonlight", name)
         ends = confirm("End the stream when the app closes?  (yes: games/emulators, no: IDEs/tools)", is_game)
-        fit = confirm("Switch the monitor to fit the phone/client while streaming?")
+        fit = confirm("Switch the monitor to fit the client while streaming?")
     else:
         ends, fit = is_game, True
     icon = find_icon(e.get("Icon")) or f"{COVERS}/desktop.svg"
